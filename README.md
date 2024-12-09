@@ -6,7 +6,7 @@
 しりとりをしながら、英単語を学べるアプリです
 
 ## ③DEMO　※デプロイが難しい場合のみ、動画やそのURLを記載
-https://drive.google.com/file/d/1DUNqCXSFujsSf5j3yduwK-u4KXa1suNf/view?usp=sharing
+https://drive.google.com/file/d/1y7zQhJVFsG83AjQOvAmRMgrRw1YWjmgh/view?usp=drive_link
 
 
 ## ④工夫した点・こだわった点
