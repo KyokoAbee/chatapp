@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>ChatApp</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header>
+    <h1>しりとりあそび</h1>
+    <nav>
+        <ul>
+            <li><a href="#">ホーム</a></li>
+            <li><a href="#" id="toggle-history">履歴</a></li>
+            <li><a href="#">設定</a></li>
+        </ul>
+    </nav>
+</header>
+
+
+    <main>
+        <form>
+            <fieldset>
+              <legend>しりとりをはじめる
+              </legend>
+              <div id="image-container"></div>
+          <!-- データ出力場所 -->
+          <ul id="output"></ul>
+
+          <!-- 入力フォーム -->
+              <div>
+                <input type="text" id="text" placeholder="あなたの回答を" class="">
+                <button type="button" id="send">送信</button>
+                <div id="trivia-container"></div>
+              </div>
+            </fieldset>
+          </form>
+    </main>
+
+    <!-- 履歴表示エリア -->
+    <div id="history-container">
+      <h3>しりとりの履歴</h3>
+      <ul id="history-output"></ul>
+    </div>
+
+    <footer>
+      <p>&copy; 2024 しりとり学習アプリ</p>
+  </footer>
+    
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+    <script>
+        
+        // Microsoft Translator API 
+        const TRANSLATOR_API_KEY = '';
+        const TRANSLATOR_REGION = 'japanwest'; // 例: 'japanwest'
+
+    </script>
+
+    <!-- ここにFirebaseのコードを貼り付けよう -->
+    <script type="module">
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+
+        // データベースとやり取りするためのコード
+        import {
+            getFirestore,
+            collection,
+            addDoc,
+            orderBy,
+            serverTimestamp,
+            onSnapshot, //データを取ってくる
+            query,
+            limit,
+            getDocs, //データを取ってくる
+            updateDoc,
+            doc
+        } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+
+
+
+        // TODO: Add SDKs for Firebase products that you want to use
+        // https://firebase.google.com/docs/web/setup#available-libraries
+      
+        // Your web app's Firebase configuration
+        const firebaseConfig = {
+
+        };
+      
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // 文字を正規化する関数
+        function normalizeText(text) {
+          // ちゃ、ちゅ、ちょなど
+          text = text.replace(/ゃ/g, 'や').replace(/ゅ/g, 'ゆ').replace(/ょ/g, 'よ');
+          return text;
+        }
+
+        // のばし棒対応。最後の文字を抽出
+        function getLastChar(text) {
+          text = normalizeText(text); //正規化の関数
+          if (text.slice(-1) === 'ー') {
+            // のばし棒の場合は一つ前の文字で比較
+            return text.slice(-2, -1);
+          }
+          return text.slice(-1); //通常時は末尾を見る
+        }
+
+        // 日時をいい感じの形式にする関数
+      function convertTimestampToDatetime(timestamp) {
+      const _d = timestamp ? new Date(timestamp * 1000) : new Date();
+      const Y = _d.getFullYear();
+      const m = (_d.getMonth() + 1).toString().padStart(2, '0');
+      const d = _d.getDate().toString().padStart(2, '0');
+      const H = _d.getHours().toString().padStart(2, '0');
+      const i = _d.getMinutes().toString().padStart(2, '0');
+      const s = _d.getSeconds().toString().padStart(2, '0');
+      return `${Y}/${m}/${d} ${H}:${i}:${s}`;
+    }
+  
+
+
+    // Firestore 形式のデータを、配列形式のデータとして出力する関数。毎回同じ。
+    function chatDocuments(fireStoreDocs) {
+        const documents = [];
+        fireStoreDocs.forEach(function (doc) {
+            const document = {
+            id: doc.id,
+            data: doc.data(),
+            };
+            documents.push(document);
+        });
+        return documents;
+        }
+
+        // 配列形式にしたデータを表示用のタグに入れて出力する関数
+        function chatElements(chatDocuments) {
+        const elements = [];
+        chatDocuments.forEach(function (document) {
+            elements.push(`
+              <div id="${document.id}">${document.data.text}</div>
+                    `);
+                });
+            return elements;
+            }
+
+
+
+
+        // 翻訳を実行する関数
+        async function translateText(text, targetLanguage = 'en') {
+            const endpoint = `https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&to=${targetLanguage}`;
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Ocp-Apim-Subscription-Key': TRANSLATOR_API_KEY,
+                    'Ocp-Apim-Subscription-Region': TRANSLATOR_REGION,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify([{ text }])
+            });
+
+            if (!response.ok) {
+                console.error('翻訳エラー:', response.statusText);
+                return '翻訳に失敗しました。';
+            }
+
+            const data = await response.json();
+            return data[0]?.translations[0]?.text || '翻訳結果が見つかりませんでした。';
+        }
+
+
+
+                  
+        // Firestore からデータが追加されるたびに、翻訳する
+        const queryRef = query(collection(db, "shiritori"), orderBy("time", "desc"), limit(1));
+        onSnapshot(queryRef, async (querySnapshot) => {
+
+        // firestore 形式のデータである querySnapshot を入力
+        const documents = querySnapshot.docs.map(doc => doc.data());
+        
+        if (documents.length > 0) {
+          const lastText = documents[0].text;
+          
+        // 翻訳を実行
+        const translatedText = await translateText(lastText);
+
+        // Firestore に翻訳結果を保存(紐づくドキュメントへ)
+        const lastDocId = querySnapshot.docs[0].id;
+        await updateDoc(doc(db, "shiritori", lastDocId), {
+          translated: translatedText
+        });
+        
+        // 翻訳結果を表示
+          $('#trivia-container').html(`<p>英語では、${translatedText} と言うよ！</p>`); 
+
+        // Firestore のデータを画面に表示
+        const elements = documents.map(doc => doc.text);
+        $('#output').html(elements);
+
+        // 履歴表示
+        const historyElements = documents.map(doc => {
+          return `<li>元のテキスト: ${doc.text}, <br> 翻訳: ${doc.translated || "翻訳中..."}</li>`;
+        });
+        $('#history-output').html(historyElements);
+      }
+      });
+
+      // Firestoreからすべての履歴を取得して表示
+      async function fetchHistory() {
+        const querySnapshot = await getDocs(collection(db, "shiritori"));
+        const historyDocs = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          data: doc.data()
+        }));
+
+      $('#history-output').html(historyElements.join(''));
+        }
+
+    // 履歴表示エリアのトグル表示
+    $("#toggle-history").on("click", function() {
+      $("#history-container").toggleClass("hidden");
+      fetchHistory();  // 履歴を取得して表示
+    });
+
+
+      // send をクリックした時の処理
+        $("#send").on("click", function () {
+        const text = $("#text").val();
+
+          // 入力された文字が空だったらアラート
+          if (!text) {
+            alert("文字を入力してください");
+            return;
+          }
+
+          // 「ん」で終わる文字が入力されたら負けのアラート
+          if (text.slice(-1) === "ん") {
+            alert("あなたの負けです");
+            $("#text").val(""); // テキストボックスを空にする
+            return;
+          }
+
+          // テキストを正規化
+          const normalizedText = normalizeText(text);
+
+      // タイムスタンプが最新のテキストを取得して文字チェック
+      const queryRef = query(collection(db, "shiritori"), orderBy("time", "desc"), limit(1));
+      
+      // タイムスタンプが最新のテキストを取得して文字チェック
+      // 一度だけ呼び出す
+      getDocs(queryRef).then((querySnapshot) => { /*onSnapshot()の利用は断念*/
+          const documents = chatDocuments(querySnapshot.docs);
+
+      //最初のデータ
+      if (documents.length === 0) {
+          const postData = { text, time: serverTimestamp() };
+          addDoc(collection(db, "shiritori"), postData);
+          $("#text").val("");
+          return;
+       }
+
+      // 最新メッセージの最後の文字を取得
+      const lastMessage = documents[0].data.text;
+      const lastChar = getLastChar(lastMessage);; // 最新メッセージの最後の文字
+      
+      // 入力されたテキストの最初の文字を取得
+      const firstChar = normalizeText(text[0]); // 入力されたテキストの最初の文字
+      
+      // どの文字を比較しているのかをコンソールに出力
+      console.log(`最新メッセージの最後の文字: ${lastChar}`);
+      console.log(`入力されたテキストの最初の文字: ${firstChar}`);
+     
+      // 一致しない場合はアラート
+      if (lastChar !== firstChar) {
+        alert("最後の文字と一致しません。");
+        return; // 一致しない場合は送信しない
+      }
+       
+      // 一致した場合にFirestoreに保存
+      const postData = { text, time: serverTimestamp() };
+      addDoc(collection(db, "shiritori"), postData);  /*addDoc(保存場所, 保存したいデータ)*/
+      $("#text").val("");  // テキストボックスを空にする
+
+      
+        });
+  });
+
+
+
+
+
+      </script>
+</body>
+</html>
